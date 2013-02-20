@@ -56,12 +56,19 @@ arity = maximum . (map (\(Clause p _ _) -> length p))
 >        let result = [mkName "res"]
 >        let funDep = (FunDep params result)
 >        let name' = mkName . camelCase . show $ name
->        return $ [ClassD [] name' (map PlainTV (params ++ result)) [funDep] []]
+>        return $ [ClassD [] name' (map PlainTV (params ++ result)) [funDep] 
+>                  [SigD name (convTyp (params ++ result) typ)]]
 
 > interpretDec (FunD name clauses) = 
 >     do let name' = mkName . camelCase . show $ name
 >        clauses' <- mapM (interpretClause name') clauses
 >        return $ concat clauses'
+
+> convTyp :: [Name] -> Type -> Type
+> convTyp [x] _ = VarT x
+> convTyp xs (ForallT _ _ t) = convTyp xs t
+> convTyp (x:xs) (AppT (AppT ArrowT t1) t2) = AppT (AppT ArrowT (VarT x)) (convTyp xs t2)
+> convTyp xs t = t
 
 > convPat :: Pat -> Q Type
 > convPat (VarP name) = return $ VarT name
