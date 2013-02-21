@@ -3,9 +3,10 @@
 > {-# LANGUAGE MultiParamTypeClasses #-}
 > {-# LANGUAGE FunctionalDependencies #-}
 > {-# LANGUAGE UndecidableInstances #-}
+> {-# LANGUAGE FlexibleInstances #-}
 
 > import Gen
-> import Data.HList
+> import Data.HList hiding (append)
 
 > [gen|
 >  append :: [a] -> [a] -> [a]

@@ -13,6 +13,9 @@
 > import Data.HList
 > import Data.HList.HListPrelude
 
+> import Data.Generics.Uniplate.Operations
+> import Data.Generics.Uniplate.Data
+
 > import Debug.Trace
 
 > gen = QuasiQuoter { quoteDec = parseDec }
@@ -60,9 +63,51 @@ arity = maximum . (map (\(Clause p _ _) -> length p))
 >                  [SigD name (convTyp (params ++ result) typ)]]
 
 > interpretDec (FunD name clauses) = 
->     do let name' = mkName . camelCase . show $ name
->        clauses' <- mapM (interpretClause name') clauses
+>     do clauses' <- mapM (interpretClause name) clauses
 >        return $ concat clauses'
+
+
+Funny how these two are very similar- shame there is no
+way to abstract this in Haskell.
+
+ convExp :: Exp -> Q Exp
+ convExp (ConE n) | nameBase n == ":" = [| HNil |]
+                   | nameBase n == "[]" = [| HCons |]
+                   | otherwise = return $ ConE n
+ convExp (ListE xs) = go xs 
+                        where go [] = [| HNil |]
+                              go (x:xs) = [| HCons $(return x) $(go xs) |]
+ convExp x = return x
+
+ convPat :: Pat -> Q Pat
+ convPat (ConP n ps) | nameBase n == ":" = [p| HNil |]
+                     | nameBase n == "[]" = return $ ConP (mkName "HCons") ps
+                     | otherwise = return $ ConP n ps
+ convPat (ListP xs) = go xs 
+                        where go [] = [p| HNil |]
+                              go (x:xs) = do y <- go xs 
+                                             return $ ConP (mkName "HCons") [x,  y]
+ convPat x = return x
+
+> convExp :: Exp -> Exp
+> convExp (ConE n) | nameBase n == ":" = ConE (mkName "HCons")
+>                   | nameBase n == "[]" = ConE (mkName "HNil")
+>                   | otherwise = ConE n
+> convExp (ListE xs) = go xs 
+>                        where go [] = ConE (mkName "HNil")
+>                              go (x:xs) = AppE (AppE (ConE (mkName "HCons")) x) (go xs)
+> convExp x =  x
+
+> convPat :: Pat -> Pat
+> convPat (ConP n ps) | nameBase n == ":" = ConP (mkName "HCons") []
+>                     | nameBase n == "[]" = ConP (mkName "HNil") ps
+> convPat p@(UInfixP p1 n p2) | nameBase n == ":" = ConP (mkName "HCons") [p1, p2]
+> convPat p@(InfixP p1 n p2) | nameBase n == ":" = ConP (mkName "HCons") [p1, p2]
+> convPat (ListP xs) = go xs 
+>                        where go [] = ConP (mkName "HNil") []
+>                              go (x:xs) = ConP (mkName "HCons") [x, go xs]
+> convPat x = x
+
 
 > convTyp :: [Name] -> Type -> Type
 > convTyp [x] _ = VarT x
@@ -70,29 +115,32 @@ arity = maximum . (map (\(Clause p _ _) -> length p))
 > convTyp (x:xs) (AppT (AppT ArrowT t1) t2) = AppT (AppT ArrowT (VarT x)) (convTyp xs t2)
 > convTyp xs t = t
 
-> convPat :: Pat -> Q Type
-> convPat (VarP name) = return $ VarT name
-> convPat (UInfixP p1 n p2) = 
+> patToTyp :: Pat -> Q Type
+> patToTyp (VarP name) = return $ VarT name
+> patToTyp (UInfixP p1 n p2) = 
 >     if (nameBase n == ":") then 
->      do p1' <- convPat p1
->         p2' <- convPat p2
+>      do p1' <- patToTyp p1
+>         p2' <- patToTyp p2
 >         return $ AppT (AppT (ConT $ mkName "HCons") p1') p2'
 >     else error "Patterns on lists only"
-> convPat (ConP n []) = if (nameBase n == "[]") then 
+> patToTyp (ConP n []) = if (nameBase n == "[]") then 
 >                          return $ ConT (mkName "HNil")
->                       else error "Patterns on lists only"
-> convPat (ListP []) = return $ ConT (mkName "HNil")
-> convPat (WildP) = do n <- newName "w"
->                      return $ VarT n
-> convPat (ParensP p) = convPat p
-> convPat p = error $ "Can't understand pattern: " ++ (show p)
+>                        else error "Patterns on lists only"
+> patToTyp (ListP []) = return $ ConT (mkName "HNil")
+> patToTyp (WildP) = do n <- newName "w"
+>                       return $ VarT n
+> patToTyp (ParensP p) = patToTyp p
+> patToTyp p = error $ "Can't understand pattern: " ++ (show p)
 >             
 
 > interpretClause :: Name -> Clause -> Q [Dec]
 > interpretClause name (Clause pats (NormalB exp) []) =
->     do pats' <- mapM convPat pats
->        let typ = foldl AppT (ConT name) (pats' ++ [VarT (mkName "res")])
->        return $ [InstanceD [] typ []]
+>     do pats' <- mapM patToTyp pats
+>        let name' = mkName . camelCase . show $ name
+>        let typ = foldl AppT (ConT name') (pats' ++ [VarT (mkName "res")])
+>        let exp' = transformBi convExp exp
+>        let pats' = map (transformBi convPat) pats
+>        return $ [InstanceD [] typ [FunD name [Clause pats' (NormalB exp') []]]]
         
 >        --[d| class $(camelCase name) $(params) |] -- | $(params) -> $(result) 
 
