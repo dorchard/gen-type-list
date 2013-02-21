@@ -89,24 +89,20 @@ way to abstract this in Haskell.
                                              return $ ConP (mkName "HCons") [x,  y]
  convPat x = return x
 
-> convExp :: Exp -> Exp
-> convExp (ConE n) | nameBase n == ":" = ConE (mkName "HCons")
->                   | nameBase n == "[]" = ConE (mkName "HNil")
->                   | otherwise = ConE n
-> convExp (ListE xs) = go xs 
->                        where go [] = ConE (mkName "HNil")
->                              go (x:xs) = AppE (AppE (ConE (mkName "HCons")) x) (go xs)
-> convExp x =  x
+> convExp :: Exp -> Q Exp
+> convExp e@(ConE n) | nameBase n == ":" = [| HCons |]
+>                    | nameBase n == "[]" = [| HNil |]
+>                    | otherwise = return e
+> convExp (ListE xs) = foldr (appE . (appE [| HCons |]) . return) [| HNil |] xs
+> convExp x = return x
 
-> convPat :: Pat -> Pat
-> convPat (ConP n ps) | nameBase n == ":" = ConP (mkName "HCons") []
->                     | nameBase n == "[]" = ConP (mkName "HNil") ps
-> convPat p@(UInfixP p1 n p2) | nameBase n == ":" = ConP (mkName "HCons") [p1, p2]
-> convPat p@(InfixP p1 n p2) | nameBase n == ":" = ConP (mkName "HCons") [p1, p2]
-> convPat (ListP xs) = go xs 
->                        where go [] = ConP (mkName "HNil") []
->                              go (x:xs) = ConP (mkName "HCons") [x, go xs]
-> convPat x = x
+> convPat :: Pat -> Q Pat
+> convPat (ConP n ps)       | nameBase n == ":" = return $ ConP (mkName "HCons") ps
+>                           | nameBase n == "[]" = [p| HNil |]
+> convPat (UInfixP p1 n p2) | nameBase n == ":" = return $ ConP (mkName "HCons") [p1, p2]
+> convPat (InfixP p1 n p2)  | nameBase n == ":" = return $ ConP (mkName "HCons") [p1, p2]
+> convPat (ListP xs) = foldr (\x -> \y -> conP (mkName "HCons") [return x,y]) [p| HNil |] xs
+> convPat x = return x
 
 
 > convTyp :: [Name] -> Type -> Type
@@ -138,8 +134,8 @@ way to abstract this in Haskell.
 >     do pats' <- mapM patToTyp pats
 >        let name' = mkName . camelCase . show $ name
 >        let typ = foldl AppT (ConT name') (pats' ++ [VarT (mkName "res")])
->        let exp' = transformBi convExp exp
->        let pats' = map (transformBi convPat) pats
+>        exp' <- transformM convExp exp
+>        pats' <- mapM (transformM convPat) pats
 >        return $ [InstanceD [] typ [FunD name [Clause pats' (NormalB exp') []]]]
         
 >        --[d| class $(camelCase name) $(params) |] -- | $(params) -> $(result) 
