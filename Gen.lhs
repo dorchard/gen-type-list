@@ -29,7 +29,6 @@
 >                       Left msg -> error msg
 >                       Right def -> interpret def
 
-
 > clausePat :: Clause -> [Pat]
 > clausePat (Clause p _ _) = p
 
@@ -46,7 +45,6 @@ arity = maximum . (map (\(Clause p _ _) -> length p))
 > interpret :: [Dec] -> Q [Dec]
 > interpret ds = do decs <- mapM interpretDec ds
 >                   return $ concat decs
->   
 
 > arity :: Type -> Int
 > arity (AppT (AppT ArrowT t1) t2) = 1 + arity t2
@@ -65,7 +63,6 @@ arity = maximum . (map (\(Clause p _ _) -> length p))
 > interpretDec (FunD name clauses) = 
 >     do clauses' <- mapM (interpretClause name) clauses
 >        return $ concat clauses'
-
 
 Funny how these two are very similar- shame there is no
 way to abstract this in Haskell.
@@ -111,6 +108,31 @@ way to abstract this in Haskell.
 > convTyp (x:xs) (AppT (AppT ArrowT t1) t2) = AppT (AppT ArrowT (VarT x)) (convTyp xs t2)
 > convTyp xs t = t
 
+> expToTyp :: Exp -> Type
+> expToTyp (VarE name) = VarT name
+> expToTyp (UInfixE e1 (ConE n) e2) = 
+>     if (nameBase n == ":") then
+>        let e1' = expToTyp e1
+>            e2' = expToTyp e2
+>        in AppT (AppT (ConT $ mkName "HCons") e1') e2'
+>     else error "Infix on lists only"
+> expToTyp (InfixE e1 (ConE n) e2) =
+>     if (nameBase n == ":") then
+>         case e1 of
+>           Just e1' -> 
+>               case e2 of 
+>                 Just e2' -> let e1'' = expToTyp e1'
+>                                 e2'' = expToTyp e2'
+>                             in AppT (AppT (ConT $ mkName "HCons") e1'') e2''
+>                 Nothing -> error "Don't support this yet"
+>           Nothing -> error "Don't support this yet"
+>     else error "Infix on lists only"
+> expToTyp (ConE n) = if (nameBase n == "[]") then ConT (mkName "HNil")
+>                     else error "List constructors only, atm"
+> expToTyp (ListE []) = ConT (mkName "HNil")
+> expToTyp (ParensE e) = expToTyp e
+> expToTyp e = error "Can't understand these expressions- yet"
+
 > patToTyp :: Pat -> Q Type
 > patToTyp (VarP name) = return $ VarT name
 > patToTyp (UInfixP p1 n p2) = 
@@ -129,6 +151,15 @@ way to abstract this in Haskell.
 > patToTyp p = error $ "Can't understand pattern: " ++ (show p)
 >             
 
+> convRecursiveCall fname argsSoFar (AppE (VarE fname') arg)  
+>    | fname == fname' = 
+>         let fname' = mkName . camelCase . show $ fname
+>         in [ClassP fname' (map expToTyp (arg:argsSoFar))]
+>    | otherwise = []
+> convRecursiveCall fname argsSoFar (AppE e1 e2) = 
+>    convRecursiveCall fname (e2:argsSoFar) e1 
+> convRecursiveCall _ _ e = []
+
 > interpretClause :: Name -> Clause -> Q [Dec]
 > interpretClause name (Clause pats (NormalB exp) []) =
 >     do pats' <- mapM patToTyp pats
@@ -136,7 +167,8 @@ way to abstract this in Haskell.
 >        let typ = foldl AppT (ConT name') (pats' ++ [VarT (mkName "res")])
 >        exp' <- transformM convExp exp
 >        pats' <- mapM (transformM convPat) pats
->        return $ [InstanceD [] typ [FunD name [Clause pats' (NormalB exp') []]]]
+>        ctxt <- return $ para (\e -> \rs -> (convRecursiveCall name [] e) ++ (concat rs)) exp
+>        return $ [InstanceD ctxt typ [FunD name [Clause pats' (NormalB exp') []]]]
         
 >        --[d| class $(camelCase name) $(params) |] -- | $(params) -> $(result) 
 
